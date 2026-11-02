@@ -33,6 +33,22 @@ With true value `x`:
   the other members (including from markets outside the group); the dashboard shows your head to
   head with everyone.
 
+## Global markets
+
+At `/global`, anyone can ask a public question (with where the answer will come from and when
+trading closes). Then:
+
+- Anyone except the asker can **make a market** by posting a quote `low–high`, optionally capped at
+  a number of trades. Updating or withdrawing a quote keeps trades already made at their price.
+- Anyone except the asker can **trade any quote**: buy at its high (scores `x − high`) or sell at
+  its low (scores `low − x`), once per quote. Trades are final.
+- After trading closes, the asker proposes the answer. Participants have 24 hours to dispute it;
+  undisputed answers finalize on their own, disputed ones wait for the asker to change or confirm.
+
+Each quote is a row in `markets` (with `question_id`) and each trade a `positions` row, so
+resolution reuses the same scoring and transfers: global trades count in head to head and group
+leaderboards like any other market. The order-book rules are in `src/lib/order-book.ts`.
+
 ## Development
 
 Requires Node 24+ (installed via nvm).

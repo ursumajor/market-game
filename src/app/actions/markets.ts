@@ -10,30 +10,10 @@ import { requireUser } from "@/lib/dal";
 import { getMarketAccess, getMembers, getMembership, getUserNames } from "@/lib/data";
 import { findUserByIdentifier, getFriendIds } from "@/lib/friends";
 import { parseNumber } from "@/lib/format";
-import { scoreMarket, validateMarket, validateTrueValue, type Position } from "@/lib/scoring";
+import { getPositions, writeResolution, type Tx } from "@/lib/resolution";
+import { validateMarket, validateTrueValue } from "@/lib/scoring";
 
 export type MarketFormState = { errors?: string[] } | undefined;
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-const getPositions = (tx: Tx | typeof db, marketId: string) =>
-  tx.select({ userId: positions.userId, side: positions.side }).from(positions).where(eq(positions.marketId, marketId));
-
-/** Replaces a market's transfers with freshly scored ones and marks it resolved. */
-async function writeResolution(
-  tx: Tx,
-  market: { id: string; makerId: string; low: number; high: number },
-  marketPositions: Position[],
-  trueValue: number,
-) {
-  const result = scoreMarket({ ...market, positions: marketPositions }, trueValue);
-  await tx.delete(transfers).where(eq(transfers.marketId, market.id));
-  await tx.insert(transfers).values(result.transfers.map((t) => ({ ...t, marketId: market.id })));
-  await tx
-    .update(markets)
-    .set({ status: "RESOLVED", trueValue, resolvedAt: new Date() })
-    .where(eq(markets.id, market.id));
-}
 
 /**
  * Moves a PENDING market on once nobody's approval is outstanding: straight to
@@ -151,7 +131,7 @@ async function loadManageable(marketId: string) {
   const user = await requireUser();
   const [market] = await db.select().from(markets).where(eq(markets.id, marketId));
   const access = market && (await getMarketAccess(market, user.id));
-  if (!market || !access?.canManage) {
+  if (!market || market.questionId || !access?.canManage) {
     throw new Error("You can't change this market.");
   }
   return market;

@@ -114,7 +114,9 @@ export type MarketListItem = Awaited<ReturnType<typeof listMarkets>>[number];
 
 export const getGroupMarkets = (groupId: string) => listMarkets(eq(markets.groupId, groupId));
 
-export const getMyUngroupedMarkets = (userId: string) => listMarkets(and(isNull(markets.groupId), involves(userId)));
+// Quotes on global questions live on their question's page, not here.
+export const getMyUngroupedMarkets = (userId: string) =>
+  listMarkets(and(isNull(markets.groupId), isNull(markets.questionId), involves(userId)));
 
 const ledgerColumns = {
   marketId: transfers.marketId,

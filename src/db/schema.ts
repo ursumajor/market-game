@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 const id = () =>
   text("id")
@@ -79,9 +79,16 @@ export const markets = sqliteTable(
     status: text("status", { enum: ["PENDING", "OPEN", "RESOLVED", "VOID"] }).notNull().default("OPEN"),
     trueValue: real("true_value"),
     resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+    // Set when this market is one MM's quote on a global question. A quote's
+    // low/high never change: updating it closes this row to new trades and
+    // opens a new one, so every trade keeps the price it was made at.
+    questionId: text("question_id").references((): AnySQLiteColumn => globalQuestions.id, { onDelete: "cascade" }),
+    acceptingTrades: integer("accepting_trades", { mode: "boolean" }).notNull().default(true),
+    // Optional cap on trades against this quote, to limit the MM's exposure.
+    maxTrades: integer("max_trades"),
     createdAt: createdAt(),
   },
-  (t) => [index("markets_group_idx").on(t.groupId)],
+  (t) => [index("markets_group_idx").on(t.groupId), index("markets_question_idx").on(t.questionId)],
 );
 
 export const positions = sqliteTable(
@@ -159,4 +166,47 @@ export const marketApprovals = sqliteTable(
     status: text("status", { enum: ["PENDING", "ACCEPTED"] }).notNull().default("PENDING"),
   },
   (t) => [primaryKey({ columns: [t.marketId, t.userId] }), index("market_approvals_user_idx").on(t.userId)],
+);
+
+/**
+ * A public question anyone can make a market on (see markets.questionId) and
+ * anyone can trade. The creator can't take part, and resolves it: they propose
+ * the answer, which becomes final after a dispute window.
+ */
+export const globalQuestions = sqliteTable(
+  "global_questions",
+  {
+    id: id(),
+    createdById: text("created_by_id")
+      .notNull()
+      .references(() => users.id),
+    question: text("question").notNull(),
+    unit: text("unit"),
+    answerSource: text("answer_source").notNull(),
+    // Trading stops at closesAt; whether that has passed is checked in SQL.
+    closesAt: integer("closes_at", { mode: "timestamp" }).notNull(),
+    // OPEN until an answer is proposed; PROPOSED during the dispute window.
+    status: text("status", { enum: ["OPEN", "PROPOSED", "RESOLVED", "VOID"] }).notNull().default("OPEN"),
+    trueValue: real("true_value"),
+    disputeEndsAt: integer("dispute_ends_at", { mode: "timestamp" }),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("global_questions_closes_idx").on(t.closesAt)],
+);
+
+/** A participant's objection to a proposed answer; one per person per proposal. */
+export const questionDisputes = sqliteTable(
+  "question_disputes",
+  {
+    questionId: text("question_id")
+      .notNull()
+      .references(() => globalQuestions.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.questionId, t.userId] })],
 );

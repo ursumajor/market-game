@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { deleteMarket, reopenMarket, resolveMarket, respondToMarketInvite, voidMarket } from "@/app/actions/markets";
 import { ActionButton } from "@/components/action-button";
@@ -34,6 +34,8 @@ async function MarketView({ params }: { params: PageProps<"/markets/[id]">["para
   const user = await requireUser();
   const { id } = await params;
   const data = await getMarket(id);
+  // A quote on a global question is shown (and traded) on the question's page.
+  if (data?.market.questionId) redirect(`/global/${data.market.questionId}`);
   const access = data && (await getMarketAccess(data.market, user.id));
   if (!data || !access) notFound();
 
