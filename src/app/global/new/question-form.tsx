@@ -2,7 +2,11 @@
 
 import { startTransition, useActionState, useState } from "react";
 import { createQuestion } from "@/app/actions/global";
+import { PeoplePicker, type Person } from "@/components/people-picker";
 import { Button, Card, Field, Input } from "@/components/ui";
+
+const SELECT_CLASS =
+  "h-10 w-full rounded-lg border border-border bg-surface px-3 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
 
 const PRESETS = [
   { label: "1 hour", ms: 3_600_000 },
@@ -16,9 +20,29 @@ function toLocalInput(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function QuestionForm() {
+// The audience <select> value is EVERYONE, FRIENDS, PEOPLE, or "group:<id>".
+function audienceHint(choice: string, groupName?: string) {
+  if (choice === "EVERYONE") return "Anyone signed in can see it, make a market and trade.";
+  if (choice === "FRIENDS") return "Your friends can see it, including people you become friends with later.";
+  if (choice === "PEOPLE") return "Only the people you pick can see it. They don't need to be your friends.";
+  return `Members of ${groupName} can see it, including people who join later. It's listed on the group's page.`;
+}
+
+export function QuestionForm({
+  groups,
+  friends,
+  initialGroupId,
+}: {
+  groups: { id: string; name: string }[];
+  friends: Person[];
+  initialGroupId?: string;
+}) {
   const [state, action, pending] = useActionState(createQuestion, undefined);
   const [closesLocal, setClosesLocal] = useState("");
+  const [choice, setChoice] = useState(initialGroupId ? `group:${initialGroupId}` : "EVERYONE");
+  const [people, setPeople] = useState<Person[]>([]);
+  const groupId = choice.startsWith("group:") ? choice.slice("group:".length) : "";
+  const audience = groupId ? "GROUP" : choice;
 
   return (
     <form
@@ -32,6 +56,10 @@ export function QuestionForm() {
       }}
       className="flex flex-col gap-6"
     >
+      <input type="hidden" name="audience" value={audience} />
+      <input type="hidden" name="groupId" value={groupId} />
+      <input type="hidden" name="invitees" value={JSON.stringify(people.map((p) => p.id))} />
+
       <Card className="flex flex-col gap-4">
         <Field label="Question" htmlFor="question">
           <Input id="question" name="question" placeholder="How many people will run the 2027 Boston Marathon?" required />
@@ -42,6 +70,30 @@ export function QuestionForm() {
         <Field label="Where will the answer come from?" htmlFor="answerSource">
           <Input id="answerSource" name="answerSource" placeholder="A link, or e.g. “the official results page”" required />
         </Field>
+      </Card>
+
+      <Card className="flex flex-col gap-3">
+        <Field label="Who can see it?" htmlFor="audience">
+          <select id="audience" value={choice} onChange={(e) => setChoice(e.target.value)} className={SELECT_CLASS}>
+            <option value="EVERYONE">Everyone</option>
+            <option value="FRIENDS">My friends</option>
+            {groups.map((g) => (
+              <option key={g.id} value={`group:${g.id}`}>
+                Group: {g.name}
+              </option>
+            ))}
+            <option value="PEOPLE">Specific people</option>
+          </select>
+        </Field>
+        <p className="text-sm text-muted">{audienceHint(choice, groups.find((g) => g.id === groupId)?.name)}</p>
+        {audience === "PEOPLE" && (
+          <PeoplePicker
+            people={people}
+            friends={friends}
+            onAdd={(p) => setPeople((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]))}
+            onRemove={(id) => setPeople((prev) => prev.filter((p) => p.id !== id))}
+          />
+        )}
       </Card>
 
       <Card className="flex flex-col gap-3">
@@ -67,8 +119,8 @@ export function QuestionForm() {
           ))}
         </div>
         <p className="text-sm text-muted">
-          You&apos;ll enter the answer after trading closes. Since you might know it, you can&apos;t make a market or trade on your own
-          question.
+          You can make a market and trade on it too. After trading closes you enter the answer, and anyone who took part has a day to
+          dispute it.
         </p>
       </Card>
 

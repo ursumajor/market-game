@@ -1,8 +1,9 @@
 /**
- * Global questions: many market makers post quotes [low, high] on the same
- * question, and anyone can trade any quote. Buying pays the quote's high and
- * wins x - high; selling receives the low and wins low - x. Each trade is a
- * one-taker market against that quote's MM, so scoring is scoring.ts as is.
+ * Online questions: many market makers post quotes [low, high] on the same
+ * question, and anyone who can see it (its asker included) can trade any quote.
+ * Buying pays the quote's high and wins x - high; selling receives the low and
+ * wins low - x. Each trade is a one-taker market against that quote's MM, so
+ * scoring is scoring.ts as is.
  */
 
 import { scoreMarket, type Side } from "./scoring";
@@ -28,7 +29,6 @@ export interface Quote {
 
 export interface TradeContext {
   userId: string;
-  creatorId: string;
   /** Whether trading on the question has closed. */
   closed: boolean;
   /** Quote ids the user has already traded. */
@@ -59,18 +59,10 @@ export function isCrossed(quotes: Quote[]): boolean {
 /** Why the user can't trade this quote, or null if they can. */
 export function tradeBlocker(quote: Quote, ctx: TradeContext): string | null {
   if (ctx.closed) return "Trading on this question has closed.";
-  if (ctx.userId === ctx.creatorId) return "You asked this question, so you can't trade on it.";
   if (quote.makerId === ctx.userId) return "You can't trade your own quote.";
   if (!quote.acceptingTrades) return "This quote has been withdrawn.";
   if (quote.maxTrades !== null && quote.tradeCount >= quote.maxTrades) return "This quote is full.";
   if (ctx.tradedQuoteIds.has(quote.id)) return "You've already traded this quote.";
-  return null;
-}
-
-/** Why the user can't post a quote on this question, or null if they can. */
-export function quoteBlocker(ctx: Pick<TradeContext, "userId" | "creatorId" | "closed">): string | null {
-  if (ctx.closed) return "Trading on this question has closed.";
-  if (ctx.userId === ctx.creatorId) return "You asked this question, so you can't make a market on it.";
   return null;
 }
 

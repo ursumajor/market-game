@@ -3,11 +3,13 @@ import { Suspense } from "react";
 import { acceptFriendRequest, removeFriendship } from "@/app/actions/friends";
 import { ActionButton } from "@/components/action-button";
 import { MarketList } from "@/components/market-list";
+import { QuestionSection } from "@/components/question-list";
 import { ButtonLink, Card, SectionTitle } from "@/components/ui";
 import { requireUser } from "@/lib/dal";
 import { getMyGroups, getMyMarketInvites, getMyTransfers, getMyUngroupedMarkets, getUserNames } from "@/lib/data";
 import { getIncomingRequests } from "@/lib/friends";
 import { fmtPoints, pointsClass } from "@/lib/format";
+import { listQuestions } from "@/lib/global";
 import { pairwiseBalances, totals } from "@/lib/ledger";
 import { GroupForms } from "./group-forms";
 
@@ -84,7 +86,13 @@ async function Invitations({ userId }: { userId: string }) {
 
 async function Dashboard() {
   const user = await requireUser();
-  const [myGroups, ungrouped] = await Promise.all([getMyGroups(user.id), getMyUngroupedMarkets(user.id)]);
+  const [myGroups, ungrouped, questions] = await Promise.all([
+    getMyGroups(user.id),
+    getMyUngroupedMarkets(user.id),
+    listQuestions(user.id),
+  ]);
+  // Open online questions shared with the user (not public ones, not their own).
+  const shared = questions.filter((q) => q.audience !== "EVERYONE" && q.createdById !== user.id && q.status === "OPEN" && !q.closed);
 
   return (
     <div className="flex flex-col gap-8">
@@ -94,6 +102,8 @@ async function Dashboard() {
       </div>
 
       <Invitations userId={user.id} />
+
+      <QuestionSection title="Online questions shared with you" rows={shared} />
 
       <section className="flex flex-col gap-3">
         <SectionTitle>Your groups</SectionTitle>

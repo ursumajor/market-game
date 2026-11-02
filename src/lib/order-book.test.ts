@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestAsk, bestBid, isCrossed, quoteBlocker, tradeBlocker, tradePoints, type Quote, type TradeContext } from "./order-book";
+import { bestAsk, bestBid, isCrossed, tradeBlocker, tradePoints, type Quote, type TradeContext } from "./order-book";
 
 const quote = (overrides: Partial<Quote> = {}): Quote => ({
   id: "q1",
@@ -14,7 +14,6 @@ const quote = (overrides: Partial<Quote> = {}): Quote => ({
 
 const ctx = (overrides: Partial<TradeContext> = {}): TradeContext => ({
   userId: "bob",
-  creatorId: "cat",
   closed: false,
   tradedQuoteIds: new Set(),
   ...overrides,
@@ -52,7 +51,6 @@ describe("tradeBlocker", () => {
 
   it("explains each reason a trade isn't allowed", () => {
     expect(tradeBlocker(quote(), ctx({ closed: true }))).toMatch(/closed/);
-    expect(tradeBlocker(quote(), ctx({ userId: "cat" }))).toMatch(/asked this question/);
     expect(tradeBlocker(quote(), ctx({ userId: "ann" }))).toMatch(/own quote/);
     expect(tradeBlocker(quote({ acceptingTrades: false }), ctx())).toMatch(/withdrawn/);
     expect(tradeBlocker(quote({ maxTrades: 3, tradeCount: 3 }), ctx())).toMatch(/full/);
@@ -61,14 +59,6 @@ describe("tradeBlocker", () => {
 
   it("allows trading under the cap", () => {
     expect(tradeBlocker(quote({ maxTrades: 3, tradeCount: 2 }), ctx())).toBeNull();
-  });
-});
-
-describe("quoteBlocker", () => {
-  it("bars the creator and closed questions only", () => {
-    expect(quoteBlocker(ctx())).toBeNull();
-    expect(quoteBlocker(ctx({ userId: "cat" }))).toMatch(/asked this question/);
-    expect(quoteBlocker(ctx({ closed: true }))).toMatch(/closed/);
   });
 });
 

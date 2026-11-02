@@ -3,13 +3,37 @@ import "server-only";
 import { and, asc, eq, getTableColumns, inArray, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
-import { globalQuestions, markets, positions, questionDisputes, transfers, users } from "@/db/schema";
+import { friendships, globalQuestions, groupMembers, groups, markets, positions, questionDisputes, questionInvitees, transfers, users } from "@/db/schema";
 import type { Quote, TradeSide } from "./order-book";
 import { getPositions, writeResolution, type Tx } from "./resolution";
 
 // Whether trading has closed is decided in SQL: reading the clock during a
 // render is rejected by Cache Components.
 const isClosed = sql<number>`(${globalQuestions.closesAt} <= unixepoch())`.mapWith(Boolean);
+
+/**
+ * Whether `userId` can see the question in the current row of global_questions:
+ * it's public, theirs, shared with them (as the creator's friend, a member of its
+ * group, or hand-picked), or they've already made a market or traded on it.
+ */
+export function canSeeQuestion(userId: string) {
+  const g = globalQuestions;
+  return sql<boolean>`(
+    ${g.audience} = 'EVERYONE'
+    or ${g.createdById} = ${userId}
+    or (${g.audience} = 'FRIENDS' and exists (
+      select 1 from ${friendships} f where f.status = 'ACCEPTED'
+        and ((f.requester_id = ${g.createdById} and f.addressee_id = ${userId})
+          or (f.addressee_id = ${g.createdById} and f.requester_id = ${userId}))))
+    or (${g.audience} = 'GROUP' and exists (
+      select 1 from ${groupMembers} gm where gm.group_id = ${g.groupId} and gm.user_id = ${userId}))
+    or (${g.audience} = 'PEOPLE' and exists (
+      select 1 from ${questionInvitees} qi where qi.question_id = ${g.id} and qi.user_id = ${userId}))
+    or exists (
+      select 1 from ${markets} qm where qm.question_id = ${g.id}
+        and (qm.maker_id = ${userId} or exists (select 1 from ${positions} qp where qp.market_id = qm.id and qp.user_id = ${userId})))
+  )`;
+}
 
 const quoteColumns = {
   id: markets.id,
@@ -36,7 +60,8 @@ async function getQuotes(questionIds: string[]) {
 
 export type QuoteRow = Awaited<ReturnType<typeof getQuotes>>[number];
 
-export async function listQuestions() {
+/** The questions `userId` can see, optionally only one group's. */
+export async function listQuestions(userId: string, { groupId }: { groupId?: string } = {}) {
   const creator = alias(users, "creator");
   const questions = await db
     .select({
@@ -47,10 +72,15 @@ export async function listQuestions() {
       closesAt: globalQuestions.closesAt,
       closed: isClosed,
       trueValue: globalQuestions.trueValue,
+      createdById: globalQuestions.createdById,
       creatorName: creator.name,
+      audience: globalQuestions.audience,
+      groupName: groups.name,
     })
     .from(globalQuestions)
     .innerJoin(creator, eq(creator.id, globalQuestions.createdById))
+    .leftJoin(groups, eq(groups.id, globalQuestions.groupId))
+    .where(and(canSeeQuestion(userId), groupId ? eq(globalQuestions.groupId, groupId) : undefined))
     .orderBy(asc(globalQuestions.closesAt))
     .limit(200);
 
@@ -74,10 +104,12 @@ export async function getQuestion(questionId: string, userId: string) {
       closed: isClosed,
       disputeOpen: sql<number>`(${globalQuestions.disputeEndsAt} > unixepoch())`.mapWith(Boolean),
       creatorName: creator.name,
+      groupName: groups.name,
     })
     .from(globalQuestions)
     .innerJoin(creator, eq(creator.id, globalQuestions.createdById))
-    .where(eq(globalQuestions.id, questionId));
+    .leftJoin(groups, eq(groups.id, globalQuestions.groupId))
+    .where(and(eq(globalQuestions.id, questionId), canSeeQuestion(userId)));
   if (!question) return null;
 
   const quotes = await getQuotes([questionId]);
@@ -137,8 +169,15 @@ export async function resolveQuestion(tx: Tx, questionId: string, trueValue: num
     .where(eq(globalQuestions.id, questionId));
 }
 
+/** Cancels the question: every quote is voided and nobody scores. */
+export async function voidQuestionTx(tx: Tx, questionId: string) {
+  await tx.update(markets).set({ status: "VOID", acceptingTrades: false }).where(eq(markets.questionId, questionId));
+  await tx.update(globalQuestions).set({ status: "VOID" }).where(eq(globalQuestions.id, questionId));
+}
+
 /**
- * Finalizes proposed answers whose dispute window has passed without a dispute.
+ * Finalizes proposals (an answer, or voiding when trueValue is null) whose
+ * dispute window has passed without a dispute.
  * Called lazily whenever global pages load, so there's no background job; it's
  * idempotent, so running it on every load is safe.
  */
@@ -160,7 +199,9 @@ export async function finalizeDueQuestions() {
         .select({ status: globalQuestions.status })
         .from(globalQuestions)
         .where(eq(globalQuestions.id, q.id));
-      if (still?.status === "PROPOSED" && q.trueValue !== null) await resolveQuestion(tx, q.id, q.trueValue);
+      if (still?.status !== "PROPOSED") return;
+      if (q.trueValue === null) await voidQuestionTx(tx, q.id);
+      else await resolveQuestion(tx, q.id, q.trueValue);
     });
   }
   return due.length;

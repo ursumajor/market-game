@@ -1,15 +1,13 @@
 "use client";
 
-import Link from "next/link";
-import { startTransition, useActionState, useState, useTransition } from "react";
-import { createMarket, findPlayer } from "@/app/actions/markets";
+import { startTransition, useActionState, useState } from "react";
+import { createMarket } from "@/app/actions/markets";
+import { PeoplePicker, type Person } from "@/components/people-picker";
 import { ScorePreview } from "@/components/score-preview";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { parseNumber } from "@/lib/format";
 import type { Position, Side } from "@/lib/scoring";
 
-// needsApproval: not the recorder's friend, so they must accept before the market counts.
-type Person = { id: string; name: string; needsApproval?: boolean };
 type GroupOption = { id: string; name: string; members: Person[] };
 
 const SELECT_CLASS =
@@ -45,107 +43,6 @@ function SideToggle({ value, onChange, name }: { value: Side | null; onChange: (
           </button>
         );
       })}
-    </div>
-  );
-}
-
-/** Players for a market outside a group: friends in one click, anyone else by username or email. */
-function ManualPlayers({
-  players,
-  friends,
-  onAdd,
-  onRemove,
-}: {
-  players: Person[];
-  friends: Person[];
-  onAdd: (p: Person) => void;
-  onRemove: (id: string) => void;
-}) {
-  const [identifier, setIdentifier] = useState("");
-  const [error, setError] = useState<string>();
-  const [looking, startLookup] = useTransition();
-  const suggestions = friends.filter((f) => !players.some((p) => p.id === f.id));
-
-  function add() {
-    startLookup(async () => {
-      const result = await findPlayer(identifier);
-      if (result.player) {
-        const { id, name, isFriend } = result.player;
-        onAdd({ id, name, needsApproval: !isFriend });
-        setIdentifier("");
-        setError(undefined);
-      } else {
-        setError(result.error);
-      }
-    });
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ul className="flex flex-wrap gap-2">
-        {players.map((p) => (
-          <li key={p.id} className="flex items-center gap-1 rounded-full bg-surface-2 py-1 pr-1 pl-3 text-sm">
-            {p.name}
-            {p.needsApproval && <span className="text-xs text-muted">· needs to accept</span>}
-            <button
-              type="button"
-              onClick={() => onRemove(p.id)}
-              aria-label={`Remove ${p.name}`}
-              className="flex size-6 items-center justify-center rounded-full text-muted hover:bg-border hover:text-foreground"
-            >
-              ×
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="flex gap-2">
-        <Input
-          aria-label="Add a player by username or email"
-          placeholder="Add by username or email"
-          value={identifier}
-          onChange={(e) => setIdentifier(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter adds the player instead of submitting the whole market.
-            if (e.key === "Enter") {
-              e.preventDefault();
-              if (identifier.trim()) add();
-            }
-          }}
-        />
-        <Button type="button" variant="ghost" onClick={add} disabled={looking || !identifier.trim()} className="shrink-0 border border-border">
-          Add
-        </Button>
-      </div>
-      {error && <p className="text-sm text-danger">{error}</p>}
-      {friends.length === 0 ? (
-        <p className="text-sm text-muted">
-          <Link href="/friends" className="text-accent hover:underline">
-            Add friends
-          </Link>{" "}
-          to pick them here in one click.
-        </p>
-      ) : (
-        suggestions.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-muted">Friends:</span>
-            {suggestions.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => onAdd(f)}
-                className="rounded-full border border-border px-3 py-1 hover:border-accent hover:text-accent"
-              >
-                + {f.name}
-              </button>
-            ))}
-          </div>
-        )
-      )}
-      {players.some((p) => p.needsApproval) && (
-        <p className="text-sm text-muted">
-          Players you aren&apos;t friends with have to accept first. Until they do, the market is pending and nobody scores.
-        </p>
-      )}
     </div>
   );
 }
@@ -225,11 +122,13 @@ export function MarketForm({
         {group ? (
           <p className="text-sm text-muted">Players come from {group.name}, and the market is listed on its page.</p>
         ) : (
-          <ManualPlayers
-            players={manualPlayers}
+          <PeoplePicker
+            people={manualPlayers}
             friends={friends}
             onAdd={(p) => setManualPlayers((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]))}
             onRemove={(id) => setManualPlayers((prev) => prev.filter((p) => p.id !== id))}
+            markNonFriends
+            nonFriendNote="Players you aren't friends with have to accept first. Until they do, the market is pending and nobody scores."
           />
         )}
       </Card>

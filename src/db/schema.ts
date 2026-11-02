@@ -169,9 +169,12 @@ export const marketApprovals = sqliteTable(
 );
 
 /**
- * A public question anyone can make a market on (see markets.questionId) and
- * anyone can trade. The creator can't take part, and resolves it: they propose
- * the answer, which becomes final after a dispute window.
+ * A question people make markets on (see markets.questionId) and trade. Its
+ * audience decides who can see it: everyone, the creator's friends (whoever they
+ * are at the time), one group's members, or hand-picked people (question_invitees).
+ * Anyone who has made a market or traded on it keeps access regardless. The
+ * creator can take part too, and resolves it: they propose the answer, which
+ * becomes final after a dispute window.
  */
 export const globalQuestions = sqliteTable(
   "global_questions",
@@ -183,6 +186,9 @@ export const globalQuestions = sqliteTable(
     question: text("question").notNull(),
     unit: text("unit"),
     answerSource: text("answer_source").notNull(),
+    audience: text("audience", { enum: ["EVERYONE", "FRIENDS", "GROUP", "PEOPLE"] }).notNull().default("EVERYONE"),
+    // Set when audience is GROUP.
+    groupId: text("group_id").references(() => groups.id, { onDelete: "cascade" }),
     // Trading stops at closesAt; whether that has passed is checked in SQL.
     closesAt: integer("closes_at", { mode: "timestamp" }).notNull(),
     // OPEN until an answer is proposed; PROPOSED during the dispute window.
@@ -192,7 +198,21 @@ export const globalQuestions = sqliteTable(
     resolvedAt: integer("resolved_at", { mode: "timestamp" }),
     createdAt: createdAt(),
   },
-  (t) => [index("global_questions_closes_idx").on(t.closesAt)],
+  (t) => [index("global_questions_closes_idx").on(t.closesAt), index("global_questions_group_idx").on(t.groupId)],
+);
+
+/** Who can see a question whose audience is PEOPLE (besides its creator). */
+export const questionInvitees = sqliteTable(
+  "question_invitees",
+  {
+    questionId: text("question_id")
+      .notNull()
+      .references(() => globalQuestions.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.questionId, t.userId] }), index("question_invitees_user_idx").on(t.userId)],
 );
 
 /** A participant's objection to a proposed answer; one per person per proposal. */

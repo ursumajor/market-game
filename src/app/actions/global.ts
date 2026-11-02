@@ -1,15 +1,16 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import * as z from "zod";
 import { db } from "@/db";
-import { globalQuestions, markets, positions, questionDisputes } from "@/db/schema";
+import { globalQuestions, markets, positions, questionDisputes, questionInvitees, users } from "@/db/schema";
 import { requireUser } from "@/lib/dal";
 import { parseNumber } from "@/lib/format";
-import { getQuestion, resolveQuestion } from "@/lib/global";
-import { DISPUTE_WINDOW_HOURS, MAX_QUESTION_DAYS, quoteBlocker, tradeBlocker, tradeSideToSide, type TradeSide } from "@/lib/order-book";
+import { getMembership } from "@/lib/data";
+import { canSeeQuestion, getQuestion, resolveQuestion, voidQuestionTx } from "@/lib/global";
+import { DISPUTE_WINDOW_HOURS, MAX_QUESTION_DAYS, tradeBlocker, tradeSideToSide, type TradeSide } from "@/lib/order-book";
 import { validateMarket, validateTrueValue } from "@/lib/scoring";
 
 export type GlobalFormState = { errors?: string[]; message?: string } | undefined;
@@ -22,8 +23,8 @@ function revalidateQuestion(questionId: string) {
   revalidatePath("/");
 }
 
-/** Loads a question with the clock-dependent flags, or throws. */
-async function loadQuestion(questionId: string) {
+/** Loads a question the user can see, with the clock-dependent flags, or throws. */
+async function loadQuestion(questionId: string, userId: string) {
   const [q] = await db
     .select({
       id: globalQuestions.id,
@@ -36,7 +37,7 @@ async function loadQuestion(questionId: string) {
       disputeOpen: sql<number>`(${globalQuestions.disputeEndsAt} > unixepoch())`.mapWith(Boolean),
     })
     .from(globalQuestions)
-    .where(eq(globalQuestions.id, questionId));
+    .where(and(eq(globalQuestions.id, questionId), canSeeQuestion(userId)));
   if (!q) throw new Error("That question doesn't exist.");
   return q;
 }
@@ -50,13 +51,18 @@ const NewQuestion = z.object({
     .min(1, { error: "Say where the answer will come from, so people can check it." })
     .max(300, { error: "Keep the source under 300 characters." }),
   closesAt: z.coerce.date({ error: "Pick when trading closes." }),
+  audience: z.enum(["EVERYONE", "FRIENDS", "GROUP", "PEOPLE"], { error: "Pick who can see the question." }),
+  groupId: z.string().optional(),
+  invitees: z.string().optional(),
 });
+
+const MAX_INVITEES = 100;
 
 export async function createQuestion(_state: GlobalFormState, formData: FormData): Promise<GlobalFormState> {
   const user = await requireUser();
   const parsed = NewQuestion.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { errors: parsed.error.issues.map((i) => i.message) };
-  const { question, unit, answerSource, closesAt } = parsed.data;
+  const { question, unit, answerSource, closesAt, audience } = parsed.data;
 
   const now = Date.now();
   if (closesAt.getTime() < now + 60_000) return { errors: ["Trading has to stay open for at least a minute."] };
@@ -64,12 +70,41 @@ export async function createQuestion(_state: GlobalFormState, formData: FormData
     return { errors: [`Trading can stay open for at most ${MAX_QUESTION_DAYS} days.`] };
   }
 
-  const [row] = await db
-    .insert(globalQuestions)
-    .values({ createdById: user.id, question, unit: unit || null, answerSource, closesAt })
-    .returning({ id: globalQuestions.id });
+  let groupId: string | null = null;
+  if (audience === "GROUP") {
+    groupId = parsed.data.groupId || null;
+    if (!groupId || !(await getMembership(groupId, user.id))) return { errors: ["Pick one of your groups."] };
+  }
+
+  let invitees: string[] = [];
+  if (audience === "PEOPLE") {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(parsed.data.invitees || "[]");
+    } catch {
+      raw = null;
+    }
+    const ids = z.array(z.string()).safeParse(raw);
+    if (!ids.success) return { errors: ["Something went wrong with the people you picked. Try again."] };
+    invitees = [...new Set(ids.data)].filter((id) => id !== user.id);
+    if (invitees.length === 0) return { errors: ["Add at least one person to share it with."] };
+    if (invitees.length > MAX_INVITEES) return { errors: [`Share it with at most ${MAX_INVITEES} people.`] };
+    const found = await db.select({ id: users.id }).from(users).where(inArray(users.id, invitees));
+    if (found.length !== invitees.length) return { errors: ["Someone you picked no longer has an account."] };
+  }
+
+  const id = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(globalQuestions)
+      .values({ createdById: user.id, question, unit: unit || null, answerSource, closesAt, audience, groupId })
+      .returning({ id: globalQuestions.id });
+    if (invitees.length > 0) await tx.insert(questionInvitees).values(invitees.map((userId) => ({ questionId: row.id, userId })));
+    return row.id;
+  });
   revalidatePath("/global");
-  redirect(`/global/${row.id}`);
+  if (groupId) revalidatePath(`/groups/${groupId}`);
+  revalidatePath("/");
+  redirect(`/global/${id}`);
 }
 
 /** Closes the user's current quote to new trades. Untraded quotes are deleted outright. */
@@ -96,9 +131,8 @@ const MaxTrades = z
 /** Posts the user's quote, replacing their previous one. Trades already made on the old quote stand. */
 export async function postQuote(questionId: string, _state: GlobalFormState, formData: FormData): Promise<GlobalFormState> {
   const user = await requireUser();
-  const q = await loadQuestion(questionId);
-  const blocked = q.status === "OPEN" ? quoteBlocker({ userId: user.id, creatorId: q.createdById, closed: q.closed }) : "Trading on this question has closed.";
-  if (blocked) return { errors: [blocked] };
+  const q = await loadQuestion(questionId, user.id);
+  if (q.status !== "OPEN" || q.closed) return { errors: ["Trading on this question has closed."] };
 
   const low = parseNumber(formData.get("low"));
   const high = parseNumber(formData.get("high"));
@@ -142,13 +176,13 @@ export async function trade(quoteId: string, side: TradeSide): Promise<GlobalFor
     insert into ${positions} (market_id, user_id, side)
     select m.id, ${user.id}, ${tradeSideToSide(side)}
     from ${markets} m
-    join ${globalQuestions} g on g.id = m.question_id
+    join ${globalQuestions} on ${globalQuestions.id} = m.question_id
     where m.id = ${quoteId}
       and m.accepting_trades = 1
       and m.maker_id != ${user.id}
-      and g.created_by_id != ${user.id}
-      and g.status = 'OPEN'
-      and g.closes_at > unixepoch()
+      and ${globalQuestions.status} = 'OPEN'
+      and ${globalQuestions.closesAt} > unixepoch()
+      and ${canSeeQuestion(user.id)}
       and (m.max_trades is null or (select count(*) from ${positions} p where p.market_id = m.id) < m.max_trades)
     on conflict do nothing
   `);
@@ -157,7 +191,7 @@ export async function trade(quoteId: string, side: TradeSide): Promise<GlobalFor
   if (!quote?.questionId) return { errors: ["That quote doesn't exist."] };
   if (result.rowsAffected === 0) {
     // Work out why for the message; the insert above is what actually enforced it.
-    const q = await loadQuestion(quote.questionId);
+    const q = await loadQuestion(quote.questionId, user.id);
     const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(positions).where(eq(positions.marketId, quoteId));
     const [mine] = await db
       .select({ one: sql`1` })
@@ -165,7 +199,7 @@ export async function trade(quoteId: string, side: TradeSide): Promise<GlobalFor
       .where(and(eq(positions.marketId, quoteId), eq(positions.userId, user.id)));
     const reason = tradeBlocker(
       { ...quote, tradeCount: n },
-      { userId: user.id, creatorId: q.createdById, closed: q.closed || q.status !== "OPEN", tradedQuoteIds: new Set(mine ? [quoteId] : []) },
+      { userId: user.id, closed: q.closed || q.status !== "OPEN", tradedQuoteIds: new Set(mine ? [quoteId] : []) },
     );
     return { errors: [reason ?? "That trade didn't go through. Try again."] };
   }
@@ -176,7 +210,7 @@ export async function trade(quoteId: string, side: TradeSide): Promise<GlobalFor
 /** The creator proposes the answer once trading has closed; it becomes final after the dispute window. */
 export async function proposeAnswer(questionId: string, _state: GlobalFormState, formData: FormData): Promise<GlobalFormState> {
   const user = await requireUser();
-  const q = await loadQuestion(questionId);
+  const q = await loadQuestion(questionId, user.id);
   if (q.createdById !== user.id) return { errors: ["Only the person who asked can enter the answer."] };
   if (!q.closed) return { errors: ["Wait until trading closes."] };
   if (q.status !== "OPEN" && q.status !== "PROPOSED") return { errors: ["This question is already settled."] };
@@ -199,7 +233,7 @@ export async function proposeAnswer(questionId: string, _state: GlobalFormState,
 
 export async function disputeAnswer(questionId: string, _state: GlobalFormState, formData: FormData): Promise<GlobalFormState> {
   const user = await requireUser();
-  const q = await loadQuestion(questionId);
+  const q = await loadQuestion(questionId, user.id);
   if (q.status !== "PROPOSED" || !q.disputeOpen) return { errors: ["There's no proposed answer open to dispute."] };
   const data = await getQuestion(questionId, user.id);
   if (!data?.isParticipant) return { errors: ["Only people who made a market or traded can dispute."] };
@@ -213,26 +247,37 @@ export async function disputeAnswer(questionId: string, _state: GlobalFormState,
   return undefined;
 }
 
-/** After the window, the creator can confirm a disputed answer (undisputed ones finalize on their own). */
+/** After the window, the creator can confirm a disputed proposal (undisputed ones finalize on their own). */
 export async function confirmAnswer(questionId: string) {
   const user = await requireUser();
-  const q = await loadQuestion(questionId);
-  if (q.createdById !== user.id || q.status !== "PROPOSED" || q.disputeOpen || q.trueValue === null) {
-    throw new Error("This answer can't be confirmed yet.");
+  const q = await loadQuestion(questionId, user.id);
+  if (q.createdById !== user.id || q.status !== "PROPOSED" || q.disputeOpen) {
+    throw new Error("This can't be confirmed yet.");
   }
   const trueValue = q.trueValue;
-  await db.transaction((tx) => resolveQuestion(tx, questionId, trueValue));
+  await db.transaction((tx) => (trueValue === null ? voidQuestionTx(tx, questionId) : resolveQuestion(tx, questionId, trueValue)));
   revalidateQuestion(questionId);
 }
 
-/** Cancels the question: nobody scores from it. */
+/**
+ * Cancels the question: nobody scores from it. If the creator has a stake (made
+ * a market or traded), voiding could dodge a loss, so it's proposed instead and
+ * can be disputed like an answer.
+ */
 export async function voidQuestion(questionId: string) {
   const user = await requireUser();
-  const q = await loadQuestion(questionId);
-  if (q.createdById !== user.id || q.status === "RESOLVED") throw new Error("You can't void this question.");
+  const q = await loadQuestion(questionId, user.id);
+  if (q.createdById !== user.id || q.status === "RESOLVED" || q.status === "VOID") throw new Error("You can't void this question.");
+  const data = await getQuestion(questionId, user.id);
+  const hasStake = data?.trades.some((t) => t.takerId === user.id || t.makerId === user.id) ?? false;
   await db.transaction(async (tx) => {
-    await tx.update(markets).set({ status: "VOID", acceptingTrades: false }).where(eq(markets.questionId, questionId));
-    await tx.update(globalQuestions).set({ status: "VOID" }).where(eq(globalQuestions.id, questionId));
+    if (!hasStake) return voidQuestionTx(tx, questionId);
+    await tx.delete(questionDisputes).where(eq(questionDisputes.questionId, questionId));
+    await tx.update(markets).set({ acceptingTrades: false }).where(eq(markets.questionId, questionId));
+    await tx
+      .update(globalQuestions)
+      .set({ status: "PROPOSED", trueValue: null, disputeEndsAt: new Date(Date.now() + DISPUTE_WINDOW_HOURS * 3_600_000) })
+      .where(eq(globalQuestions.id, questionId));
   });
   revalidateQuestion(questionId);
 }

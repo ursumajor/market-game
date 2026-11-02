@@ -2,10 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { MarketList } from "@/components/market-list";
+import { QuestionSection } from "@/components/question-list";
 import { ButtonLink, Card, SectionTitle } from "@/components/ui";
 import { requireUser } from "@/lib/dal";
 import { getGroupMarkets, getMembers, getMembership, getTransfersAmong } from "@/lib/data";
 import { fmtPoints, pointsClass } from "@/lib/format";
+import { finalizeDueQuestions, listQuestions } from "@/lib/global";
 import { pairwiseBalances, playerStats, totals } from "@/lib/ledger";
 import { InviteLink } from "./invite-link";
 
@@ -112,7 +114,14 @@ async function GroupView({ params }: { params: PageProps<"/groups/[id]">["params
 
   const members = await getMembers(id);
   // Scores are head to head between members, from every market they've played, in this group or not.
-  const [entries, groupMarkets] = await Promise.all([getTransfersAmong(members.map((m) => m.id)), getGroupMarkets(id)]);
+  await finalizeDueQuestions();
+  const [entries, groupMarkets, questions] = await Promise.all([
+    getTransfersAmong(members.map((m) => m.id)),
+    getGroupMarkets(id),
+    listQuestions(user.id, { groupId: id }),
+  ]);
+  const liveQuestions = questions.filter((q) => q.status === "OPEN" || q.status === "PROPOSED");
+  const settledQuestions = questions.filter((q) => q.status === "RESOLVED" || q.status === "VOID").reverse();
   const { group } = membership;
 
   return (
@@ -125,7 +134,15 @@ async function GroupView({ params }: { params: PageProps<"/groups/[id]">["params
           <h1 className="text-2xl font-semibold">{group.name}</h1>
           <InviteLink code={group.inviteCode} />
         </div>
-        <ButtonLink href={`/markets/new?group=${group.id}`}>New market</ButtonLink>
+        <div className="flex gap-2">
+          <Link
+            href={`/global/new?group=${group.id}`}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-border px-4 text-sm font-medium transition-colors hover:bg-surface-2"
+          >
+            Ask a question
+          </Link>
+          <ButtonLink href={`/markets/new?group=${group.id}`}>Record a market</ButtonLink>
+        </div>
       </div>
 
       <section className="flex flex-col gap-3">
@@ -139,8 +156,11 @@ async function GroupView({ params }: { params: PageProps<"/groups/[id]">["params
         <HeadToHead members={members} entries={entries} />
       </section>
 
+      <QuestionSection title="Online questions" rows={liveQuestions} empty="None yet. Ask one and members can make markets and trade on it." />
+      <QuestionSection title="Settled online questions" rows={settledQuestions} />
+
       <section className="flex flex-col gap-3">
-        <SectionTitle>Markets</SectionTitle>
+        <SectionTitle>Recorded markets</SectionTitle>
         <MarketList items={groupMarkets} />
       </section>
     </div>

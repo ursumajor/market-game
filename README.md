@@ -33,17 +33,27 @@ With true value `x`:
   the other members (including from markets outside the group); the dashboard shows your head to
   head with everyone.
 
-## Global markets
+## Online markets
 
-At `/global`, anyone can ask a public question (with where the answer will come from and when
-trading closes). Then:
+At `/global`, anyone can ask a question (with where the answer will come from and when trading
+closes) and pick who can see it:
 
-- Anyone except the asker can **make a market** by posting a quote `low–high`, optionally capped at
-  a number of trades. Updating or withdrawing a quote keeps trades already made at their price.
-- Anyone except the asker can **trade any quote**: buy at its high (scores `x − high`) or sell at
-  its low (scores `low − x`), once per quote. Trades are final.
-- After trading closes, the asker proposes the answer. Participants have 24 hours to dispute it;
-  undisputed answers finalize on their own, disputed ones wait for the asker to change or confirm.
+- **Everyone**, **my friends** (whoever your friends are at the time), **one of your groups** (its
+  members, and it's listed on the group page), or **specific people** (anyone, by username or email).
+- Anyone who has made a market or traded on a question keeps seeing it, even if they later drop
+  out of its audience. Open questions shared with you are listed on your dashboard.
+
+Then everyone who can see it, the asker included:
+
+- can **make a market** by posting a quote `low–high`, optionally capped at a number of trades.
+  Updating or withdrawing a quote keeps trades already made at their price.
+- can **trade any quote** except their own: buy at its high (scores `x − high`) or sell at its low
+  (scores `low − x`), once per quote. Trades are final.
+
+After trading closes, the asker proposes the answer. Participants have 24 hours to dispute it;
+undisputed answers finalize on their own, disputed ones wait for the asker to change or confirm.
+The asker can void a question at any time, unless they have trades on it: then voiding is a
+proposal that stops trading and can be disputed the same way, so they can't cancel a losing position.
 
 Each quote is a row in `markets` (with `question_id`) and each trade a `positions` row, so
 resolution reuses the same scoring and transfers: global trades count in head to head and group

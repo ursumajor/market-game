@@ -29,7 +29,7 @@ async function UserMenu() {
   return (
     <div className="flex items-center gap-2 text-sm">
       <Link href="/global" className="rounded-lg px-3 py-1.5 hover:bg-surface-2">
-        Global
+        Online
       </Link>
       <Link href="/friends" className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 hover:bg-surface-2">
         Friends

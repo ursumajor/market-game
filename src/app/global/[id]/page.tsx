@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { confirmAnswer, disputeAnswer, postQuote, proposeAnswer, trade, voidQuestion, withdrawQuote } from "@/app/actions/global";
 import { ActionButton } from "@/components/action-button";
+import { AudienceTag } from "@/components/audience-tag";
 import { Countdown, LocalTime } from "@/components/time";
 import { Card, SectionTitle } from "@/components/ui";
 import { requireUser } from "@/lib/dal";
@@ -16,7 +17,8 @@ type Data = NonNullable<Awaited<ReturnType<typeof getQuestion>>>;
 
 function phaseLabel(q: Data["question"]) {
   if (q.status === "OPEN") return q.closed ? "Closed" : "Trading";
-  return { PROPOSED: "Answer proposed", RESOLVED: "Resolved", VOID: "Void" }[q.status];
+  if (q.status === "PROPOSED") return q.trueValue === null ? "Void proposed" : "Answer proposed";
+  return { RESOLVED: "Resolved", VOID: "Void" }[q.status];
 }
 
 /** Links only plain http(s) URLs; anything else is shown as text. */
@@ -34,7 +36,6 @@ function OrderBook({ data, userId, unit }: { data: Data; userId: string; unit: s
   const live = quotes.filter((x) => x.acceptingTrades);
   const ctx = {
     userId,
-    creatorId: q.createdById,
     closed: q.status !== "OPEN" || q.closed,
     tradedQuoteIds: new Set(trades.filter((t) => t.takerId === userId).map((t) => t.quoteId)),
   };
@@ -99,15 +100,21 @@ function Resolution({ data, userId, unit }: { data: Data; userId: string; unit: 
   return (
     <section className="flex flex-col gap-3">
       <SectionTitle>Answer</SectionTitle>
-      {q.status === "PROPOSED" && q.trueValue !== null && q.disputeEndsAt && (
+      {q.status === "PROPOSED" && q.disputeEndsAt && (
         <Card className="flex flex-col gap-3">
           <p>
-            {q.creatorName} says the answer is{" "}
-            <span className="font-mono font-semibold tabular-nums">
-              {fmtNumber(q.trueValue)}
-              {unit}
-            </span>
-            .{" "}
+            {q.trueValue === null ? (
+              <>{q.creatorName} wants to void this question, so nobody would score. Since they have trades on it, others can object.</>
+            ) : (
+              <>
+                {q.creatorName} says the answer is{" "}
+                <span className="font-mono font-semibold tabular-nums">
+                  {fmtNumber(q.trueValue)}
+                  {unit}
+                </span>
+                .
+              </>
+            )}{" "}
             {q.disputeOpen ? (
               <span className="text-muted">
                 Final <LocalTime at={q.disputeEndsAt.getTime()} /> (<Countdown to={q.disputeEndsAt.getTime()} done="any moment" />) unless
@@ -131,19 +138,26 @@ function Resolution({ data, userId, unit }: { data: Data; userId: string; unit: 
             <InlineForm
               action={disputeAnswer.bind(null, q.id)}
               name="reason"
-              label="What's wrong with the answer?"
-              placeholder="What's wrong with it? Link the right answer if you can."
+              label={q.trueValue === null ? "Why shouldn't it be voided?" : "What's wrong with the answer?"}
+              placeholder={q.trueValue === null ? "Why shouldn't it be voided?" : "What's wrong with it? Link the right answer if you can."}
               submitLabel="Dispute"
             />
           )}
           {isCreator && !q.disputeOpen && disputes.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-sm">
-              <span className="text-muted">It was disputed, so it won&apos;t finalize on its own. Change it below, or confirm it.</span>
+              <span className="text-muted">
+                It was disputed, so it won&apos;t finalize on its own. {q.closed && "Enter an answer below, or confirm it."}
+                {!q.closed && "Confirm it, or wait until trading's closing time to enter an answer instead."}
+              </span>
               <ActionButton
                 action={confirmAnswer.bind(null, q.id)}
-                label="Confirm answer"
+                label={q.trueValue === null ? "Confirm voiding" : "Confirm answer"}
                 variant="primary"
-                confirmText="Confirm this answer despite the disputes? Everyone is scored with it."
+                confirmText={
+                  q.trueValue === null
+                    ? "Void this question despite the objections? Nobody scores."
+                    : "Confirm this answer despite the disputes? Everyone is scored with it."
+                }
               />
             </div>
           )}
@@ -151,13 +165,13 @@ function Resolution({ data, userId, unit }: { data: Data; userId: string; unit: 
       )}
       {canPropose && (
         <Card className="flex flex-col gap-2">
-          <p className="text-sm font-medium">{q.status === "PROPOSED" ? "Change the answer" : "Enter the answer"}</p>
+          <p className="text-sm font-medium">{q.status === "PROPOSED" && q.trueValue !== null ? "Change the answer" : "Enter the answer"}</p>
           <InlineForm
             action={proposeAnswer.bind(null, q.id)}
             name="trueValue"
             label="The true answer"
             placeholder="The true answer"
-            submitLabel={q.status === "PROPOSED" ? "Change" : "Submit"}
+            submitLabel={q.status === "PROPOSED" && q.trueValue !== null ? "Change" : "Submit"}
             numeric
           />
           <p className="text-sm text-muted">
@@ -211,6 +225,7 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
   const { question: q, quotes, trades } = data;
   const unit = q.unit ? ` ${q.unit}` : "";
   const isCreator = q.createdById === user.id;
+  const back = q.audience === "GROUP" && q.groupId ? { href: `/groups/${q.groupId}`, label: q.groupName } : { href: "/global", label: "Online markets" };
   const tradingOpen = q.status === "OPEN" && !q.closed;
   const myQuote = quotes.find((x) => x.acceptingTrades && x.makerId === user.id) ?? null;
   const myTrades = trades.filter((t) => t.takerId === user.id || t.makerId === user.id);
@@ -218,12 +233,15 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <Link href="/global" className="text-sm text-muted hover:text-foreground">
-          ← Global markets
+        <Link href={back.href} className="text-sm text-muted hover:text-foreground">
+          ← {back.label}
         </Link>
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold">{q.question}</h1>
-          <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium">{phaseLabel(q)}</span>
+          <div className="flex shrink-0 flex-wrap justify-end gap-1">
+            <AudienceTag audience={q.audience} groupName={q.groupName} creatorName={q.creatorName} />
+            <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium">{phaseLabel(q)}</span>
+          </div>
         </div>
         <p className="text-sm text-muted">
           Asked by {q.creatorName}
@@ -263,7 +281,7 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
         </section>
       )}
 
-      {tradingOpen && !isCreator && (
+      {tradingOpen && (
         <section className="flex flex-col gap-3">
           <SectionTitle>Your market</SectionTitle>
           <Card className="flex flex-col gap-3">
@@ -280,11 +298,6 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
           </Card>
         </section>
       )}
-      {tradingOpen && isCreator && (
-        <Card>
-          <p className="text-sm text-muted">You asked this question, so you can&apos;t make a market or trade on it.</p>
-        </Card>
-      )}
 
       {myTrades.length > 0 && (
         <section className="flex flex-col gap-3">
@@ -295,12 +308,16 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
         </section>
       )}
 
-      {isCreator && q.status !== "RESOLVED" && q.status !== "VOID" && (
+      {isCreator && q.status !== "RESOLVED" && q.status !== "VOID" && !(q.status === "PROPOSED" && q.trueValue === null) && (
         <div className="flex justify-end">
           <ActionButton
             action={voidQuestion.bind(null, q.id)}
             label="Void question"
-            confirmText="Void this question? Every trade on it is cancelled and nobody scores."
+            confirmText={
+              myTrades.length > 0
+                ? "Propose voiding this question? Trading stops now. Since you have trades on it, others get a day to object; if nobody does, every trade is cancelled."
+                : "Void this question? Every trade on it is cancelled and nobody scores."
+            }
           />
         </div>
       )}
