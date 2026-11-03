@@ -1,8 +1,8 @@
-/** Signed points, e.g. "+0.17", "−0.33", "0.00". */
+/** Signed points to one decimal, e.g. "+133.3", "−50.0", "0.0". */
 export function fmtPoints(n: number): string {
-  const rounded = Math.round(n * 100) / 100;
-  if (rounded === 0) return "0.00";
-  return (rounded > 0 ? "+" : "−") + Math.abs(rounded).toFixed(2);
+  const rounded = Math.round(n * 10) / 10;
+  if (rounded === 0) return "0.0";
+  return (rounded > 0 ? "+" : "−") + Math.abs(rounded).toFixed(1);
 }
 
 export function fmtNumber(n: number): string {
@@ -20,6 +20,6 @@ export function parseNumber(input: unknown): number {
 }
 
 export function pointsClass(n: number): string {
-  const rounded = Math.round(n * 100) / 100;
+  const rounded = Math.round(n * 10) / 10;
   return rounded > 0 ? "text-gain" : rounded < 0 ? "text-loss" : "text-muted";
 }

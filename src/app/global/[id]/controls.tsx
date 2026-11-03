@@ -4,7 +4,7 @@ import { startTransition, useActionState, useState } from "react";
 import type { GlobalFormState } from "@/app/actions/global";
 import { Button, Field, Input } from "@/components/ui";
 import { fmtNumber, fmtPoints, parseNumber, pointsClass } from "@/lib/format";
-import { tradePoints, type Trade } from "@/lib/order-book";
+import { scoreTrades, type Trade } from "@/lib/order-book";
 import { validateTrueValue } from "@/lib/scoring";
 
 type FormAction = (state: GlobalFormState, formData: FormData) => Promise<GlobalFormState>;
@@ -144,13 +144,18 @@ export function InlineForm({
   );
 }
 
-/** The user's trades on this question (as taker or MM), and what they'd score at a given answer. */
-export function MyTrades({ trades, meId, unit }: { trades: (Trade & { makerName: string; takerName: string })[]; meId: string; unit: string }) {
+/**
+ * The user's trades on this question (as taker or MM), and what they'd score at
+ * a given answer. `trades` is every trade on the question, since they share the pot.
+ */
+export function MyTrades({ trades: allTrades, meId, unit }: { trades: (Trade & { makerName: string; takerName: string })[]; meId: string; unit: string }) {
   const [answer, setAnswer] = useState("");
   const x = parseNumber(answer);
   const valid = validateTrueValue(x).length === 0;
-  const myPoints = (t: Trade) => (t.takerId === meId ? 1 : -1) * tradePoints(t, x);
-  const total = valid ? trades.reduce((s, t) => s + myPoints(t), 0) : 0;
+  const scored = valid ? scoreTrades(allTrades, x) : allTrades.map((t) => ({ ...t, points: 0 }));
+  const trades = scored.filter((t) => t.takerId === meId || t.makerId === meId);
+  const myPoints = (t: (typeof trades)[number]) => (t.takerId === meId ? 1 : -1) * t.points;
+  const total = trades.reduce((s, t) => s + myPoints(t), 0);
 
   return (
     <div className="flex flex-col gap-3">
@@ -182,7 +187,7 @@ export function MyTrades({ trades, meId, unit }: { trades: (Trade & { makerName:
         />
         {valid && (
           <span className="text-sm">
-            You&apos;d score <span className={`font-mono font-semibold tabular-nums ${pointsClass(total)}`}>{fmtPoints(total)}</span>
+            With the trades so far, you&apos;d score <span className={`font-mono font-semibold tabular-nums ${pointsClass(total)}`}>{fmtPoints(total)}</span>
           </span>
         )}
       </div>

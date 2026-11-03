@@ -4,8 +4,8 @@ import { and, asc, eq, getTableColumns, inArray, notExists, sql } from "drizzle-
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import { friendships, globalQuestions, groupMembers, groups, markets, positions, questionDisputes, questionInvitees, transfers, users } from "@/db/schema";
-import type { Quote, TradeSide } from "./order-book";
-import { getPositions, writeResolution, type Tx } from "./resolution";
+import { scoreTrades, sideToTradeSide, type Quote, type TradeSide } from "./order-book";
+import { getPositions, writeTransfers, type Tx } from "./resolution";
 
 // Whether trading has closed is decided in SQL: reading the clock during a
 // render is rejected by Cache Components.
@@ -152,13 +152,23 @@ export async function getQuestion(questionId: string, userId: string) {
   return { question, quotes, trades: fullTrades, results, disputes, isParticipant };
 }
 
-/** Resolves every quote on the question at `trueValue`: traded quotes are scored, untraded ones voided. */
+/**
+ * Resolves every quote on the question at `trueValue`: the question's pot is
+ * shared over all its trades, and untraded quotes are voided.
+ */
 export async function resolveQuestion(tx: Tx, questionId: string, trueValue: number) {
   const quotes = await tx.select().from(markets).where(eq(markets.questionId, questionId));
+  const trades = [];
   for (const quote of quotes) {
-    const quotePositions = await getPositions(tx, quote.id);
-    if (quotePositions.length > 0) {
-      await writeResolution(tx, quote, quotePositions, trueValue);
+    for (const p of await getPositions(tx, quote.id)) {
+      trades.push({ quoteId: quote.id, makerId: quote.makerId, takerId: p.userId, low: quote.low, high: quote.high, side: sideToTradeSide(p.side) });
+    }
+  }
+  const scored = scoreTrades(trades, trueValue);
+  for (const quote of quotes) {
+    const mine = scored.filter((t) => t.quoteId === quote.id);
+    if (mine.length > 0) {
+      await writeTransfers(tx, quote.id, mine, trueValue);
     } else {
       await tx.update(markets).set({ status: "VOID", acceptingTrades: false }).where(eq(markets.id, quote.id));
     }

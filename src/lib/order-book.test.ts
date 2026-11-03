@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestAsk, bestBid, isCrossed, tradeBlocker, tradePoints, type Quote, type TradeContext } from "./order-book";
+import { bestAsk, bestBid, isCrossed, tradeBlocker, scoreTrades, type Quote, type TradeContext } from "./order-book";
 
 const quote = (overrides: Partial<Quote> = {}): Quote => ({
   id: "q1",
@@ -62,21 +62,32 @@ describe("tradeBlocker", () => {
   });
 });
 
-describe("tradePoints", () => {
-  const ann = { quoteId: "a", makerId: "ann", takerId: "bob", low: 40, high: 50 };
+describe("scoreTrades", () => {
+  const ann = { quoteId: "a", makerId: "ann", low: 40, high: 50 };
 
-  it("scores buys at the high and sells at the low, normalized by |x|", () => {
-    expect(tradePoints({ ...ann, side: "BUY" }, 60)).toBeCloseTo(10 / 60, 12);
-    expect(tradePoints({ ...ann, side: "SELL" }, 60)).toBeCloseTo(-20 / 60, 12);
-    expect(tradePoints({ ...ann, side: "SELL" }, 20)).toBeCloseTo(1, 12);
+  it("shares one pot over every trade on the question", () => {
+    // Bob buys at 50 (+10), Cat sells at 40 (−20), so Ann nets +10. Three participants: pot 300.
+    const scored = scoreTrades(
+      [
+        { ...ann, takerId: "bob", side: "BUY" as const },
+        { ...ann, takerId: "cat", side: "SELL" as const },
+      ],
+      60,
+    );
+    expect(scored.map((t) => [t.takerId, t.raw, t.points])).toEqual([
+      ["bob", 10, 150],
+      ["cat", -20, -300],
+    ]);
   });
 
-  it("locks in a profit when buying from one MM and selling to another whose quotes cross", () => {
-    const buyAnn = { ...ann, side: "BUY" as const };
-    const sellBen = { quoteId: "b", makerId: "ben", takerId: "bob", low: 55, high: 65, side: "SELL" as const };
+  it("still profits when buying from one MM and selling to another whose quotes cross", () => {
+    const trades = [
+      { ...ann, takerId: "bob", side: "BUY" as const },
+      { quoteId: "b", makerId: "ben", takerId: "bob", low: 55, high: 65, side: "SELL" as const },
+    ];
     for (const x of [10, 45, 52, 70, 1000]) {
-      const raw = (tradePoints(buyAnn, x) + tradePoints(sellBen, x)) * Math.abs(x);
-      expect(raw).toBeCloseTo(55 - 50, 9);
+      const bob = scoreTrades(trades, x).reduce((s, t) => s + t.points, 0);
+      expect(bob).toBeGreaterThan(0);
     }
   });
 });

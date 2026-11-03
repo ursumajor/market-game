@@ -303,7 +303,7 @@ async function QuestionView({ params }: { params: PageProps<"/global/[id]">["par
         <section className="flex flex-col gap-3">
           <SectionTitle>Your trades</SectionTitle>
           <Card>
-            <MyTrades trades={myTrades} meId={user.id} unit={unit} />
+            <MyTrades trades={trades} meId={user.id} unit={unit} />
           </Card>
         </section>
       )}

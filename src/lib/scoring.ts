@@ -8,10 +8,14 @@
  *   - LOWER takers score   low - x
  *   - the MM scores minus the sum of all takers, so each market is zero-sum.
  *
- * Scores are normalized by |x| so that markets on different scales are
- * comparable. Every taker's result is a trade against the MM, which is what
- * lets groups keep a pairwise ledger.
+ * Those raw results are in the question's units, so they're turned into points
+ * with a fixed pot (awardPot): POT_PER_PLAYER points for every participant,
+ * which the winners share and the losers pay, in proportion to their raw
+ * results. Every taker's result is a trade against the MM, which is what lets
+ * groups keep a pairwise ledger.
  */
+
+export const POT_PER_PLAYER = 100;
 
 export type Side = "HIGHER" | "LOWER";
 
@@ -30,7 +34,7 @@ export interface MarketQuote {
 export interface Transfer {
   makerId: string;
   takerId: string;
-  /** Unnormalized points, in the question's units. */
+  /** The result in the question's units. */
   raw: number;
   /** Points won by the taker (and lost by the MM); negative means the reverse. */
   points: number;
@@ -68,21 +72,41 @@ export function validateMarket(market: MarketQuote): string[] {
 
 export function validateTrueValue(trueValue: number): string[] {
   if (!Number.isFinite(trueValue)) return ["The true value must be a number."];
-  if (trueValue === 0) {
-    return ["The true value can't be 0, because scores are divided by it."];
-  }
   return [];
+}
+
+/** What a taker on `side` wins from the MM in the question's units. */
+export const rawResult = (side: Side, low: number, high: number, trueValue: number) =>
+  side === "HIGHER" ? trueValue - high : low - trueValue;
+
+/**
+ * Turns raw results into points for one question (a recorded market, or every
+ * trade on an online question together). The pot is POT_PER_PLAYER times the
+ * number of participants: winners (net raw > 0) share +pot and losers share
+ * -pot, each in proportion to their net raw result.
+ *
+ * Since total winnings equal total losses, that's the same as multiplying every
+ * raw transfer by pot / (total winnings), so pairwise head to head stays exact.
+ */
+export function awardPot<T extends { makerId: string; takerId: string; raw: number }>(raws: T[]): (T & { points: number })[] {
+  const net = new Map<string, number>();
+  for (const t of raws) {
+    net.set(t.takerId, (net.get(t.takerId) ?? 0) + t.raw);
+    net.set(t.makerId, (net.get(t.makerId) ?? 0) - t.raw);
+  }
+  const winnings = [...net.values()].reduce((s, v) => s + Math.max(0, v), 0);
+  const factor = winnings > 0 ? (POT_PER_PLAYER * net.size) / winnings : 0;
+  // `0 +` so a break-even result is 0, not -0.
+  return raws.map((t) => ({ ...t, points: 0 + t.raw * factor }));
 }
 
 export function scoreMarket(market: MarketQuote, trueValue: number): MarketResult {
   const errors = [...validateMarket(market), ...validateTrueValue(trueValue)];
   if (errors.length > 0) throw new Error(errors.join(" "));
 
-  const scale = Math.abs(trueValue);
-  const transfers = market.positions.map((p): Transfer => {
-    const raw = p.side === "HIGHER" ? trueValue - market.high : market.low - trueValue;
-    return { makerId: market.makerId, takerId: p.userId, raw, points: raw / scale };
-  });
+  const transfers: Transfer[] = awardPot(
+    market.positions.map((p) => ({ makerId: market.makerId, takerId: p.userId, raw: rawResult(p.side, market.low, market.high, trueValue) })),
+  );
 
   const sum = (key: "raw" | "points") => transfers.reduce((acc, t) => acc + t[key], 0);
   // `0 - x` rather than `-x` so a break-even MM scores 0, not -0.

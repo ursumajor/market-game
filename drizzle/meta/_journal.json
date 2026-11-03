@@ -43,6 +43,13 @@
       "when": 1793641511260,
       "tag": "0005_tiresome_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793719976814,
+      "tag": "0006_rescore_with_pot",
+      "breakpoints": true
     }
   ]
 }

@@ -5,13 +5,19 @@ Make markets on numbers with friends and keep a running, zero-sum score per grou
 ## Rules as scored
 
 The market maker (MM) quotes `[low, high]`; every other listed player says HIGHER or LOWER.
-With true value `x`:
+With true value `x`, each player's raw result (in the question's units) is:
 
-- HIGHER scores `(x - high) / |x|`
-- LOWER scores `(low - x) / |x|`
-- the MM scores minus the sum of everyone else
+- HIGHER: `x - high`
+- LOWER: `low - x`
+- the MM: minus the sum of everyone else
 
-`x` can't be 0. Players who sat out a market just aren't listed. See `src/lib/scoring.ts`.
+Raw results become points with a **fixed pot of 100 points per participant**. The winners
+(raw result > 0) share +pot and the losers share −pot, in proportion to their raw results. So
+every question moves the same amount per player whatever its scale or units, and an answer of
+0 or a negative answer works like any other. On an online question the pot covers every trade on it
+together, and participants are everyone with at least one trade (as MM or trader).
+
+Players who sat out a market just aren't listed. See `awardPot` in `src/lib/scoring.ts`.
 
 ## How it works
 
@@ -47,8 +53,8 @@ Then everyone who can see it, the asker included:
 
 - can **make a market** by posting a quote `low–high`, optionally capped at a number of trades.
   Updating or withdrawing a quote keeps trades already made at their price.
-- can **trade any quote** except their own: buy at its high (scores `x − high`) or sell at its low
-  (scores `low − x`), once per quote. Trades are final.
+- can **trade any quote** except their own: buy at its high (raw result `x − high`) or sell at its
+  low (raw result `low − x`), once per quote. Trades are final.
 
 After trading closes, the asker proposes the answer. Participants have 24 hours to dispute it;
 undisputed answers finalize on their own, disputed ones wait for the asker to change or confirm.
@@ -56,7 +62,7 @@ The asker can void a question at any time, unless they have trades on it: then v
 proposal that stops trading and can be disputed the same way, so they can't cancel a losing position.
 
 Each quote is a row in `markets` (with `question_id`) and each trade a `positions` row, so
-resolution reuses the same scoring and transfers: global trades count in head to head and group
+resolution writes the same transfers as recorded markets: global trades count in head to head and group
 leaderboards like any other market. The order-book rules are in `src/lib/order-book.ts`.
 
 ## Development

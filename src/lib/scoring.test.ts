@@ -18,6 +18,7 @@ const pointsBy = (result: ReturnType<typeof scoreMarket>) =>
   Object.fromEntries(result.transfers.map((t) => [t.takerId, t.points]));
 
 describe("scoreMarket", () => {
+  // Four participants, so the pot is 400: winners share +400, losers pay 400.
   it("scores the worked example from the plan", () => {
     const result = scoreMarket(quote(), 60);
     expect(result.transfers.map((t) => [t.takerId, t.raw])).toEqual([
@@ -26,44 +27,56 @@ describe("scoreMarket", () => {
       ["carol", -20],
     ]);
     expect(result.makerRaw).toBe(0);
-    expect(pointsBy(result)).toEqual({ alice: 10 / 60, bob: 10 / 60, carol: -20 / 60 });
+    expect(pointsBy(result)).toEqual({ alice: 200, bob: 200, carol: -400 });
     expect(result.makerPoints).toBe(0);
   });
 
-  it("is zero-sum", () => {
-    for (const x of [-123.4, 1, 39, 45, 50, 51, 1e6]) {
+  it("is zero-sum, and moves exactly the pot", () => {
+    for (const x of [-123.4, 0, 1, 39, 45, 51, 1e6]) {
       const r = scoreMarket(quote(), x);
-      const total = r.transfers.reduce((s, t) => s + t.points, 0) + r.makerPoints;
-      expect(total).toBeCloseTo(0, 12);
+      const all = [...r.transfers.map((t) => t.points), r.makerPoints];
+      expect(all.reduce((s, p) => s + p, 0)).toBeCloseTo(0, 9);
+      expect(all.reduce((s, p) => s + Math.max(0, p), 0)).toBeCloseTo(400, 9);
     }
   });
 
-  it("makes the MM win from everyone when x lands inside the range", () => {
+  it("makes the MM win the pot when x lands inside the range", () => {
     const r = scoreMarket(quote(), 45);
-    expect(pointsBy(r)).toEqual({ alice: -5 / 45, bob: -5 / 45, carol: -5 / 45 });
-    expect(r.makerPoints).toBeCloseTo(15 / 45, 12);
+    for (const p of Object.values(pointsBy(r))) expect(p).toBeCloseTo(-400 / 3, 9);
+    expect(r.makerPoints).toBeCloseTo(400, 9);
   });
 
-  it("handles every taker on one side", () => {
+  it("splits winnings and losses in proportion to raw results", () => {
     const r = scoreMarket(quote({ positions: [{ userId: "a", side: "LOWER" }, { userId: "b", side: "LOWER" }] }), 20);
-    expect(pointsBy(r)).toEqual({ a: 1, b: 1 });
-    expect(r.makerPoints).toBe(-2);
+    expect(pointsBy(r)).toEqual({ a: 150, b: 150 });
+    expect(r.makerPoints).toBe(-300);
   });
 
-  it("normalizes by |x| for negative answers", () => {
-    const r = scoreMarket(quote({ low: -20, high: -10, positions: [{ userId: "a", side: "LOWER" }] }), -40);
-    expect(r.transfers[0].raw).toBe(20);
-    expect(r.transfers[0].points).toBe(0.5);
+  it("handles answers of 0 and negative answers", () => {
+    const zero = scoreMarket(quote(), 0);
+    expect(pointsBy(zero)).toEqual({ alice: -200, bob: -200, carol: 160 });
+    expect(zero.makerPoints).toBeCloseTo(240, 9);
+    const neg = scoreMarket(quote({ low: -20, high: -10, positions: [{ userId: "a", side: "LOWER" }] }), -40);
+    expect(neg.transfers[0].points).toBe(200);
   });
 
-  it("is scale-invariant", () => {
-    const small = scoreMarket(quote(), 60);
-    const big = scoreMarket(quote({ low: 40_000, high: 50_000 }), 60_000);
-    small.transfers.forEach((t, i) => expect(big.transfers[i].points).toBeCloseTo(t.points, 12));
+  it("doesn't depend on the question's scale or offset", () => {
+    const base = scoreMarket(quote(), 60);
+    const scaled = scoreMarket(quote({ low: 40_000, high: 50_000 }), 60_000);
+    const shifted = scoreMarket(quote({ low: 1040, high: 1050 }), 1060);
+    base.transfers.forEach((t, i) => {
+      expect(scaled.transfers[i].points).toBeCloseTo(t.points, 9);
+      expect(shifted.transfers[i].points).toBeCloseTo(t.points, 9);
+    });
   });
 
-  it("rejects x = 0 and invalid markets", () => {
-    expect(() => scoreMarket(quote(), 0)).toThrow(/can't be 0/);
+  it("scores nothing when everyone breaks even", () => {
+    const r = scoreMarket(quote({ positions: [{ userId: "a", side: "HIGHER" }] }), 50);
+    expect(r.transfers[0].points).toBe(0);
+    expect(r.makerPoints).toBe(0);
+  });
+
+  it("rejects invalid markets", () => {
     expect(() => scoreMarket(quote({ low: 50, high: 50 }), 1)).toThrow(/less than high/);
   });
 });
@@ -113,8 +126,8 @@ describe("ledger", () => {
 
   it("totals sum to zero and include MMs", () => {
     const t = totals(entries);
-    expect(t.get("alice")).toBeCloseTo(10 / 60 - 0.5, 12);
-    expect(t.get("mm")).toBeCloseTo(0 + 0.5, 12);
+    expect(t.get("alice")).toBeCloseTo(200 - 200, 9);
+    expect(t.get("mm")).toBeCloseTo(0 + 200, 9);
     expect([...t.values()].reduce((a, b) => a + b, 0)).toBeCloseTo(0, 12);
   });
 
@@ -124,20 +137,20 @@ describe("ledger", () => {
       ...market2.map((t) => ({ ...t, marketId: "m2" })),
     ];
     const s = playerStats(withIds);
-    expect(s.get("mm")).toEqual({ taken: 1, takerPoints: 0.5, made: 1, makerPoints: 0 });
+    expect(s.get("mm")).toEqual({ taken: 1, takerPoints: 200, made: 1, makerPoints: 0 });
     expect(s.get("alice")!.made).toBe(1);
-    expect(s.get("alice")!.makerPoints).toBe(-0.5);
-    expect(s.get("carol")).toEqual({ taken: 1, takerPoints: -20 / 60, made: 0, makerPoints: 0 });
+    expect(s.get("alice")!.makerPoints).toBe(-200);
+    expect(s.get("carol")).toEqual({ taken: 1, takerPoints: -400, made: 0, makerPoints: 0 });
   });
 
   it("pairwise balances are antisymmetric and match totals", () => {
     const b = pairwiseBalances(entries);
-    expect(b.get("alice")!.get("mm")).toBeCloseTo(10 / 60 - 0.5, 12);
-    expect(b.get("mm")!.get("alice")).toBeCloseTo(-(10 / 60 - 0.5), 12);
+    expect(b.get("alice")!.get("mm")).toBeCloseTo(200 - 200, 9);
+    expect(b.get("mm")!.get("alice")).toBeCloseTo(-(200 - 200), 9);
     expect(b.get("bob")!.has("carol")).toBe(false);
     const t = totals(entries);
     for (const [id, row] of b) {
-      expect([...row.values()].reduce((a, x) => a + x, 0)).toBeCloseTo(t.get(id)!, 12);
+      expect([...row.values()].reduce((a, x) => a + x, 0)).toBeCloseTo(t.get(id)!, 9);
     }
   });
 });

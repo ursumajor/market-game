@@ -2,11 +2,11 @@
  * Online questions: many market makers post quotes [low, high] on the same
  * question, and anyone who can see it (its asker included) can trade any quote.
  * Buying pays the quote's high and wins x - high; selling receives the low and
- * wins low - x. Each trade is a one-taker market against that quote's MM, so
- * scoring is scoring.ts as is.
+ * wins low - x. Each trade is a one-taker market against that quote's MM, and
+ * the question's pot is shared over all its trades together (scoreTrades).
  */
 
-import { scoreMarket, type Side } from "./scoring";
+import { awardPot, rawResult, type Side } from "./scoring";
 
 export const DISPUTE_WINDOW_HOURS = 24;
 export const MAX_QUESTION_DAYS = 90;
@@ -75,11 +75,7 @@ export interface Trade {
   side: TradeSide;
 }
 
-/** What one trade scores for the taker if the answer is `trueValue`. */
-export function tradePoints(trade: Trade, trueValue: number): number {
-  const result = scoreMarket(
-    { makerId: trade.makerId, low: trade.low, high: trade.high, positions: [{ userId: trade.takerId, side: tradeSideToSide(trade.side) }] },
-    trueValue,
-  );
-  return result.transfers[0].points;
+/** Every trade on a question scored at `trueValue`: points are what the taker wins from the quote's MM. */
+export function scoreTrades<T extends Trade>(trades: T[], trueValue: number): (T & { raw: number; points: number })[] {
+  return awardPot(trades.map((t) => ({ ...t, raw: rawResult(tradeSideToSide(t.side), t.low, t.high, trueValue) })));
 }
